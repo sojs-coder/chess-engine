@@ -73,6 +73,8 @@ type Game = {
   moveIndex: number;
   enPassantTarget: string | null;
   castlingRights: CastlingRights;
+  halfMoveClock: number;
+  positionCounts: Map<string, number>;
   result?: GameResult;
 };
 
@@ -243,7 +245,12 @@ async function handleStartGame(
       blackKingSide: true,
       blackQueenSide: true,
     },
+    halfMoveClock: 0,
+    positionCounts: new Map(),
   };
+
+  const initialKey = getPositionKey(game);
+  game.positionCounts.set(initialKey, 1);
 
   games.set(game.id, game);
   await appendGameLine(
@@ -389,6 +396,32 @@ async function runGameLoop(gameId: string): Promise<void> {
 
       game.turn = opponentColor;
       game.moveIndex += currentColor === "black" ? 1 : 0;
+
+      game.halfMoveClock =
+        piece.type === "pawn" || applied.captured !== undefined
+          ? 0
+          : game.halfMoveClock + 1;
+
+      if (game.halfMoveClock >= 100) {
+        await finishGame(game, {
+          winnerPlayerId: null,
+          loserPlayerId: null,
+          reason: "50-move rule",
+        });
+        return;
+      }
+
+      const posKey = getPositionKey(game);
+      game.positionCounts.set(posKey, (game.positionCounts.get(posKey) ?? 0) + 1);
+      if ((game.positionCounts.get(posKey) ?? 0) >= 3) {
+        await finishGame(game, {
+          winnerPlayerId: null,
+          loserPlayerId: null,
+          reason: "Threefold repetition",
+        });
+        return;
+      }
+
       break;
     }
   }
@@ -925,8 +958,18 @@ function cloneGame(game: Game): Game {
     remainingTimeSeconds: { ...game.remainingTimeSeconds },
     moves: game.moves.map((move) => ({ ...move })),
     castlingRights: { ...game.castlingRights },
+    positionCounts: new Map(game.positionCounts),
     result: game.result ? { ...game.result } : undefined,
   };
+}
+
+function getPositionKey(game: Game): string {
+  const board = serializeBoard(game.board)
+    .map((row) => row.join(""))
+    .join("|");
+  const cr = game.castlingRights;
+  const castling = `${cr.whiteKingSide ? "K" : ""}${cr.whiteQueenSide ? "Q" : ""}${cr.blackKingSide ? "k" : ""}${cr.blackQueenSide ? "q" : ""}`;
+  return `${board};${game.turn};${castling};${game.enPassantTarget ?? "-"}`;
 }
 
 async function finishGame(game: Game, result: GameResult): Promise<void> {
@@ -992,6 +1035,7 @@ function serializeGame(game: Game) {
     remainingTimeSeconds: game.remainingTimeSeconds,
     moves: game.moves,
     moveIndex: game.moveIndex,
+    halfMoveClock: game.halfMoveClock,
     result: game.result,
     board: serializeBoard(game.board),
   };
