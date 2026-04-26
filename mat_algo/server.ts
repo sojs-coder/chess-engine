@@ -1,6 +1,14 @@
+import { readFileSync } from "node:fs";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { Board } from "./Board";
-import { search } from "./Tree";
+import {
+  getLocalGameSnapshot,
+  LocalGameError,
+  registerLocalPlayer,
+  resetLocalGame,
+  submitLocalPlayerMove,
+} from "./LocalPlay";
+import { findBestMove } from "./engine";
 import { Color, Move, Piece, PieceType, Square } from "./types";
 
 const PORT = Number(process.env.PORT ?? "4003");
@@ -8,6 +16,9 @@ const PLAYER_ADDRESS = process.env.PLAYER_ADDRESS?.trim() || "127.0.0.1";
 const PLAYER_PATH = normalizeBasePath(process.env.PLAYER_PATH?.trim() || "/");
 const ORCHESTRATOR_URL = (process.env.ORCHESTRATOR_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
 const FILES = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+const INDEX_HTML = readFileSync(new URL("./public/index.html", import.meta.url), "utf8");
+const APP_CSS = readFileSync(new URL("./public/app.css", import.meta.url), "utf8");
+const APP_JS = readFileSync(new URL("./public/app.js", import.meta.url), "utf8");
 
 type CastlingRights = {
   whiteKingSide: boolean;
@@ -21,7 +32,6 @@ type MoveRequest = {
   playerId: string;
   whitePlayerId: string;
   blackPlayerId: string;
-  // orchestrator sends roundAdditionalSeconds; some builds use incrementSeconds
   roundAdditionalSeconds?: number;
   incrementSeconds?: number;
   board: string[][];
@@ -42,32 +52,106 @@ type RegisterPlayerResponse = {
   player: RegisteredPlayer;
 };
 
+type LocalRegisterRequest = {
+  name?: string;
+  preferredColor?: "white" | "black" | "random";
+};
+
+type LocalMoveRequest = {
+  playerId?: string;
+  from?: string;
+  to?: string;
+};
+
+type ResetLocalGameRequest = {
+  playerId?: string;
+};
+
+class HttpError extends Error {
+  statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.statusCode = statusCode;
+  }
+}
+
 const movePath = joinBasePath(PLAYER_PATH, "move");
 const healthPath = joinBasePath(PLAYER_PATH, "health");
 
 createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  if (req.method === "POST" && req.url === movePath) {
-    await handleMove(req, res);
-    return;
-  }
+  const requestUrl = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host ?? `127.0.0.1:${PORT}`}`,
+  );
+  const pathname = requestUrl.pathname;
 
-  if (req.method === "GET" && req.url === healthPath) {
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-    res.end("ok");
-    return;
-  }
+  try {
+    if (req.method === "POST" && pathname === movePath) {
+      await handleOrchestratorMove(req, res);
+      return;
+    }
 
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-  res.end("Not found");
+    if (req.method === "GET" && pathname === healthPath) {
+      respondText(res, 200, "ok");
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/register") {
+      await handleRegisterLocalPlayer(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/game") {
+      handleGetLocalGame(requestUrl, res);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/move") {
+      await handleLocalPlayerMove(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/reset") {
+      await handleResetLocalGame(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/") {
+      respond(res, 200, { "content-type": "text/html; charset=utf-8" }, INDEX_HTML);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/app.css") {
+      respond(res, 200, { "content-type": "text/css; charset=utf-8" }, APP_CSS);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/app.js") {
+      respond(res, 200, { "content-type": "text/javascript; charset=utf-8" }, APP_JS);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/favicon.ico") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    respondText(res, 404, "Not found");
+  } catch (error) {
+    handleRouteError(error, res);
+  }
 }).listen(PORT, () => {
   console.log(
-    `Mat algo player listening on port ${PORT} (path ${PLAYER_PATH}, move ${movePath})`,
+    `Mat algo player listening on port ${PORT} (path ${PLAYER_PATH}, move ${movePath}, local arena /)`,
   );
   void registerPlayer();
 });
 
-async function handleMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const body = await readJsonBody(req);
+async function handleOrchestratorMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJsonBody<MoveRequest>(req);
   const engineColor = inferColor(body);
   const board = buildBoard(body);
   const roundAdditionalSeconds = body.roundAdditionalSeconds ?? body.incrementSeconds ?? 2;
@@ -75,14 +159,40 @@ async function handleMove(req: IncomingMessage, res: ServerResponse): Promise<vo
   const move = findBestMove(board, engineColor, roundAdditionalSeconds);
 
   if (!move) {
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-    res.end("A1,A1");
+    respondText(res, 200, "A1,A1");
     return;
   }
 
-  const response = `${squareToNotation(move.from)},${squareToNotation(move.to)}`;
-  res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-  res.end(response);
+  respondText(res, 200, `${squareToNotation(move.from)},${squareToNotation(move.to)}`);
+}
+
+async function handleRegisterLocalPlayer(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody<LocalRegisterRequest>(req);
+  respondJson(res, 200, registerLocalPlayer(body));
+}
+
+function handleGetLocalGame(requestUrl: URL, res: ServerResponse): void {
+  const playerId = requestUrl.searchParams.get("playerId") ?? "";
+  respondJson(res, 200, getLocalGameSnapshot(playerId));
+}
+
+async function handleLocalPlayerMove(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody<LocalMoveRequest>(req);
+  respondJson(res, 200, submitLocalPlayerMove(body));
+}
+
+async function handleResetLocalGame(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readJsonBody<ResetLocalGameRequest>(req);
+  respondJson(res, 200, resetLocalGame(body.playerId ?? ""));
 }
 
 function inferColor(body: MoveRequest): Color {
@@ -90,33 +200,6 @@ function inferColor(body: MoveRequest): Color {
     return body.playerId === body.whitePlayerId ? Color.White : Color.Black;
   }
   return body.turn === "white" ? Color.White : Color.Black;
-}
-
-/**
- * Iterative deepening search with a time budget.
- *
- * Always completes at least 4 plies. Keeps searching deeper until
- * time_exploring > roundAdditionalSeconds - 0.5 (0.5s buffer for latency).
- * Returns the best move from the last fully completed search.
- */
-function findBestMove(board: Board, engineColor: Color, roundAdditionalSeconds: number): Move | null {
-  const timeBudgetMs = Math.max(0, roundAdditionalSeconds - 0.5) * 1000;
-  const startTime = Date.now();
-
-  let bestMove = search(board, 4, engineColor);
-
-  if (timeBudgetMs <= 0) return bestMove;
-
-  for (let depth = 5; ; depth++) {
-    if (Date.now() - startTime >= timeBudgetMs) break;
-
-    const move = search(board, depth, engineColor);
-    if (move !== null) bestMove = move;
-
-    if (Date.now() - startTime >= timeBudgetMs) break;
-  }
-
-  return bestMove;
 }
 
 function buildBoard(body: MoveRequest): Board {
@@ -167,7 +250,7 @@ function parseEnPassantTarget(target: string | null): Square | null {
   if (!target || target.length < 2) return null;
   const file = target.charCodeAt(0) - "a".charCodeAt(0);
   const rank = parseInt(target[1], 10) - 1;
-  if (file < 0 || file > 7 || isNaN(rank) || rank < 0 || rank > 7) return null;
+  if (file < 0 || file > 7 || Number.isNaN(rank) || rank < 0 || rank > 7) return null;
   return { file, rank };
 }
 
@@ -175,12 +258,20 @@ function squareToNotation(square: Square): string {
   return `${FILES[square.file]}${square.rank + 1}`;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<MoveRequest> {
+async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as MoveRequest;
+
+  const rawBody = Buffer.concat(chunks).toString("utf8").trim();
+  if (!rawBody) return {} as T;
+
+  try {
+    return JSON.parse(rawBody) as T;
+  } catch {
+    throw new HttpError(400, "Invalid JSON body.");
+  }
 }
 
 function normalizeBasePath(path: string): string {
@@ -190,6 +281,42 @@ function normalizeBasePath(path: string): string {
 
 function joinBasePath(basePath: string, suffix: string): string {
   return basePath === "/" ? `/${suffix}` : `${basePath}/${suffix}`;
+}
+
+function respond(
+  res: ServerResponse,
+  statusCode: number,
+  headers: Record<string, string>,
+  body: string,
+): void {
+  res.writeHead(statusCode, headers);
+  res.end(body);
+}
+
+function respondText(res: ServerResponse, statusCode: number, body: string): void {
+  respond(res, statusCode, { "content-type": "text/plain; charset=utf-8" }, body);
+}
+
+function respondJson(res: ServerResponse, statusCode: number, data: unknown): void {
+  respond(
+    res,
+    statusCode,
+    {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+    JSON.stringify(data),
+  );
+}
+
+function handleRouteError(error: unknown, res: ServerResponse): void {
+  if (error instanceof LocalGameError || error instanceof HttpError) {
+    respondJson(res, error.statusCode, { error: error.message });
+    return;
+  }
+
+  console.error("Request failed:", error);
+  respondJson(res, 500, { error: "Internal server error." });
 }
 
 async function registerPlayer(): Promise<void> {

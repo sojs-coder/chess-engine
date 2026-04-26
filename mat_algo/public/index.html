@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mat Arena</title>
+    <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+    <div class="page-noise" aria-hidden="true"></div>
+    <main class="shell">
+        <section class="intro-panel reveal">
+            <p class="eyebrow">Local Match Desk</p>
+            <h1>Mat's AI</h1>
+            <div class="stat-strip">
+                <article class="stat-card">
+                    <span class="stat-label">Mode</span>
+                    <strong>Human vs Mat Bot</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Rules</span>
+                    <strong>Server-side move validation</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Promotion</span>
+                    <strong>Auto-queen for speed</strong>
+                </article>
+            </div>
+        </section>
+
+        <section class="arena-panel reveal">
+            <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
+
+            <section id="registration-panel" class="panel registration-panel">
+                <div class="panel-head">
+                    <p class="kicker">Player Registry</p>
+                    <h2>Claim a board.</h2>
+                </div>
+
+                <form id="registration-form" class="registration-form">
+                    <label class="field">
+                        <span>Name</span>
+                        <input
+                            id="player-name"
+                            name="name"
+                            type="text"
+                            maxlength="32"
+                            placeholder="Your player name"
+                            required
+                        >
+                    </label>
+
+                    <fieldset class="color-fieldset">
+                        <legend>Color</legend>
+                        <label class="choice-card">
+                            <input type="radio" name="preferredColor" value="white" checked>
+                            <span class="choice-title">White</span>
+                            <span class="choice-copy">You open the game and play from the bottom of the board.</span>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="preferredColor" value="black">
+                            <span class="choice-title">Black</span>
+                            <span class="choice-copy">The bot starts and the board flips to your side.</span>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="preferredColor" value="random">
+                            <span class="choice-title">Random</span>
+                            <span class="choice-copy">Let the server assign your seat and start immediately.</span>
+                        </label>
+                    </fieldset>
+
+                    <button id="register-button" class="action-button" type="submit">
+                        Register and Start
+                    </button>
+                </form>
+            </section>
+
+            <section id="game-panel" class="game-panel hidden">
+                <div class="board-stage">
+                    <div class="board-meta">
+                        <div>
+                            <p class="kicker">Live Table</p>
+                            <h2 id="status-heading">Waiting for match data</h2>
+                        </div>
+                        <div class="meta-actions">
+                            <div id="thinking-indicator" class="thinking-indicator">
+                                Mat Bot is Thinking
+                            </div>
+                            <button id="reset-button" class="secondary-button" type="button">
+                                New Game
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="board-shell">
+                        <div id="files-top" class="axis axis-top"></div>
+                        <div id="ranks-left" class="axis axis-left"></div>
+                        <div id="board" class="board" aria-label="Chess board"></div>
+                        <div id="ranks-right" class="axis axis-right"></div>
+                        <div id="files-bottom" class="axis axis-bottom"></div>
+                    </div>
+                </div>
+
+                <aside class="sidebar">
+                    <section class="panel identity-card">
+                        <p class="kicker">Registered Player</p>
+                        <h3 id="player-display">-</h3>
+                        <div class="identity-grid">
+                            <div>
+                                <span>Player ID</span>
+                                <strong id="player-id">-</strong>
+                            </div>
+                            <div>
+                                <span>Color</span>
+                                <strong id="player-color">-</strong>
+                            </div>
+                            <div>
+                                <span>Opponent</span>
+                                <strong id="bot-display">Mat Bot</strong>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel clock-card">
+                        <div id="player-clock-row" class="clock-row">
+                            <div class="clock-copy">
+                                <span id="player-clock-label">Player</span>
+                                <small>Your remaining time</small>
+                            </div>
+                            <strong id="player-clock">05:00</strong>
+                        </div>
+                        <div id="bot-clock-row" class="clock-row">
+                            <div class="clock-copy">
+                                <span id="bot-clock-label">Mat Bot</span>
+                                <small>Bot remaining time</small>
+                            </div>
+                            <strong id="bot-clock">05:00</strong>
+                        </div>
+                    </section>
+
+                    <section class="panel insight-card">
+                        <p class="kicker">Match State</p>
+                        <p id="status-text" class="status-text">Register to begin.</p>
+                        <p id="move-prompt" class="move-prompt">
+                            Click a piece, then a destination square. Promotions auto-queen.
+                        </p>
+                    </section>
+
+                    <section class="panel move-panel">
+                        <div class="move-panel-head">
+                            <p class="kicker">Score Sheet</p>
+                            <p id="move-count">0 plies</p>
+                        </div>
+                        <div id="move-list" class="move-list"></div>
+                    </section>
+                </aside>
+            </section>
+        </section>
+    </main>
+
+    <noscript>JavaScript is required to use the local chess board.</noscript>
+    <script type="module" src="/app.js"></script>
+</body>
+</html>

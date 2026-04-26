@@ -139,6 +139,69 @@ export class Board {
         return true;
     }
 
+    private isSquareAttacked(target: Square, byColor: Color): boolean {
+        for (let rank = 0; rank < 8; rank++) {
+            for (let file = 0; file < 8; file++) {
+                const piece = this.board[rank][file];
+                if (!piece || piece.color !== byColor) continue;
+
+                const from = { file, rank };
+                const fileDelta = target.file - file;
+                const rankDelta = target.rank - rank;
+                const absFileDelta = Math.abs(fileDelta);
+                const absRankDelta = Math.abs(rankDelta);
+
+                switch (piece.type) {
+                    case PieceType.Pawn: {
+                        const direction = byColor === Color.White ? 1 : -1;
+                        if (rankDelta === direction && absFileDelta === 1) return true;
+                        break;
+                    }
+                    case PieceType.Knight:
+                        if (
+                            (absFileDelta === 2 && absRankDelta === 1) ||
+                            (absFileDelta === 1 && absRankDelta === 2)
+                        ) {
+                            return true;
+                        }
+                        break;
+                    case PieceType.Bishop:
+                        if (absFileDelta === absRankDelta && absFileDelta > 0 && this.isPathClear(from, target)) {
+                            return true;
+                        }
+                        break;
+                    case PieceType.Rook:
+                        if (
+                            (fileDelta === 0 || rankDelta === 0) &&
+                            !(fileDelta === 0 && rankDelta === 0) &&
+                            this.isPathClear(from, target)
+                        ) {
+                            return true;
+                        }
+                        break;
+                    case PieceType.Queen:
+                        if (
+                            (
+                                absFileDelta === absRankDelta ||
+                                fileDelta === 0 ||
+                                rankDelta === 0
+                            ) &&
+                            !(fileDelta === 0 && rankDelta === 0) &&
+                            this.isPathClear(from, target)
+                        ) {
+                            return true;
+                        }
+                        break;
+                    case PieceType.King:
+                        if (Math.max(absFileDelta, absRankDelta) === 1) return true;
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private getPawnMoves(square: Square, piece: Piece): Move[] {
         const moves: Move[] = [];
         const direction = piece.color === Color.White ? 1 : -1;
@@ -281,18 +344,32 @@ export class Board {
 
     private canCastleKingside(color: Color): boolean {
         const rank = color === Color.White ? 0 : 7;
+        const rook = this.getPiece({ file: 7, rank });
+        const opponentColor = color === Color.White ? Color.Black : Color.White;
         return (
+            rook?.type === PieceType.Rook &&
+            rook.color === color &&
             this.getPiece({ file: 5, rank }) === null &&
-            this.getPiece({ file: 6, rank }) === null
+            this.getPiece({ file: 6, rank }) === null &&
+            !this.isSquareAttacked({ file: 4, rank }, opponentColor) &&
+            !this.isSquareAttacked({ file: 5, rank }, opponentColor) &&
+            !this.isSquareAttacked({ file: 6, rank }, opponentColor)
         );
     }
 
     private canCastleQueenside(color: Color): boolean {
         const rank = color === Color.White ? 0 : 7;
+        const rook = this.getPiece({ file: 0, rank });
+        const opponentColor = color === Color.White ? Color.Black : Color.White;
         return (
+            rook?.type === PieceType.Rook &&
+            rook.color === color &&
             this.getPiece({ file: 1, rank }) === null &&
             this.getPiece({ file: 2, rank }) === null &&
-            this.getPiece({ file: 3, rank }) === null
+            this.getPiece({ file: 3, rank }) === null &&
+            !this.isSquareAttacked({ file: 4, rank }, opponentColor) &&
+            !this.isSquareAttacked({ file: 3, rank }, opponentColor) &&
+            !this.isSquareAttacked({ file: 2, rank }, opponentColor)
         );
     }
 
@@ -378,6 +455,14 @@ export class Board {
         this.setPiece(move.from, null);
         this.setPiece(move.to, piece);
 
+        // Default promotions to a queen so games can finish without an extra prompt.
+        if (piece.type === PieceType.Pawn && (move.to.rank === 7 || move.to.rank === 0)) {
+            this.setPiece(move.to, {
+                type: move.promotion ?? PieceType.Queen,
+                color: piece.color,
+            });
+        }
+
         if (piece.type === PieceType.King) {
             if (piece.color === Color.White) {
                 this.whiteKingPos = move.to;
@@ -414,6 +499,16 @@ export class Board {
             } else {
                 if (move.from.file === 7) this.blackCanCastleKingside = false;
                 if (move.from.file === 0) this.blackCanCastleQueenside = false;
+            }
+        }
+
+        if (capturedPiece?.type === PieceType.Rook) {
+            if (capturedPiece.color === Color.White) {
+                if (move.to.file === 7 && move.to.rank === 0) this.whiteCanCastleKingside = false;
+                if (move.to.file === 0 && move.to.rank === 0) this.whiteCanCastleQueenside = false;
+            } else {
+                if (move.to.file === 7 && move.to.rank === 7) this.blackCanCastleKingside = false;
+                if (move.to.file === 0 && move.to.rank === 7) this.blackCanCastleQueenside = false;
             }
         }
 
@@ -477,35 +572,7 @@ export class Board {
     private isKingInCheck(color: Color): boolean {
         const kingPos = color === Color.White ? this.whiteKingPos : this.blackKingPos;
         const opponentColor = color === Color.White ? Color.Black : Color.White;
-
-        for (let rank = 0; rank < 8; rank++) {
-            for (let file = 0; file < 8; file++) {
-                const square = { file, rank };
-                const piece = this.getPiece(square);
-
-                if (!piece || piece.color !== opponentColor) continue;
-
-                const mockBoard = this.board;
-                const moves =
-                    piece.type === PieceType.Pawn
-                        ? this.getPawnMoves(square, piece)
-                        : piece.type === PieceType.Knight
-                            ? this.getKnightMoves(square, piece)
-                            : piece.type === PieceType.Bishop
-                                ? this.getBishopMoves(square, piece)
-                                : piece.type === PieceType.Rook
-                                    ? this.getRookMoves(square, piece)
-                                    : piece.type === PieceType.Queen
-                                        ? this.getQueenMoves(square, piece)
-                                        : this.getKingMoves(square, piece);
-
-                if (moves.some(m => m.to.file === kingPos.file && m.to.rank === kingPos.rank)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return this.isSquareAttacked(kingPos, opponentColor);
     }
 
     isInCheck(): boolean {
