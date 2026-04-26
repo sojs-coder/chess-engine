@@ -92,6 +92,82 @@ Response:
 }
 ```
 
+## Game State
+
+The orchestrator keeps an in-memory `Game` object. A newly started game is initialized like this:
+
+```ts
+const game: Game = {
+  id: randomUUID(),
+  status: "active",
+  whitePlayerId: whitePlayer.id,
+  blackPlayerId: blackPlayer.id,
+  board: createInitialBoard(),
+  turn: "white",
+  createdAt: new Date().toISOString(),
+  startedAt: new Date().toISOString(),
+  startTimeMinutes,
+  incrementSeconds,
+  remainingTimeSeconds: {
+    white: Math.round(startTimeMinutes * 60),
+    black: Math.round(startTimeMinutes * 60),
+  },
+  moves: [],
+  moveIndex: 1,
+  enPassantTarget: null,
+  castlingRights: {
+    whiteKingSide: true,
+    whiteQueenSide: true,
+    blackKingSide: true,
+    blackQueenSide: true,
+  },
+  halfMoveClock: 0,
+  positionCounts: new Map(),
+};
+```
+
+Notes:
+
+- `board` is the internal board model (`Piece | null`), created by `createInitialBoard()`.
+- `incrementSeconds` is the stored per-turn increment. The move request payload sends that same value as `roundAdditionalSeconds`.
+- `enPassantTarget`, `castlingRights`, `halfMoveClock`, and `positionCounts` are tracked in memory for move legality and draw detection.
+- Immediately after creation, the initial position is added to `positionCounts` with a count of `1`.
+
+`GET /games/<gameId>` returns a serialized snapshot of the current game state rather than the raw in-memory object:
+
+```json
+{
+  "id": "uuid",
+  "status": "active",
+  "whitePlayerId": "uuid",
+  "blackPlayerId": "uuid",
+  "turn": "white",
+  "createdAt": "2026-04-25T23:00:00.000Z",
+  "startedAt": "2026-04-25T23:00:00.000Z",
+  "startTimeMinutes": 5,
+  "incrementSeconds": 2,
+  "remainingTimeSeconds": {
+    "white": 300,
+    "black": 300
+  },
+  "moves": [],
+  "moveIndex": 1,
+  "halfMoveClock": 0,
+  "board": [
+    ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"],
+    ["bP", "bP", "bP", "bP", "bP", "bP", "bP", "bP"],
+    ["", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", ""],
+    ["wP", "wP", "wP", "wP", "wP", "wP", "wP", "wP"],
+    ["wR", "wN", "wB", "wQ", "wK", "wB", "wN", "wR"]
+  ]
+}
+```
+
+When a game finishes, this response also includes `finishedAt` and `result`.
+
 ## Player Move Contract
 
 For each turn, the orchestrator sends a `POST` request to:
@@ -133,6 +209,8 @@ Request body shape:
 }
 ```
 
+This move request uses the same serialized board format returned by `GET /games/<gameId>`, not the raw internal `Game.board` structure.
+
 The player must return plain text in this format:
 
 ```text
@@ -165,7 +243,7 @@ The file contains:
 The orchestrator also exposes:
 
 - `GET /players`: list registered players
-- `GET /games/<gameId>`: current game state
+- `GET /games/<gameId>`: serialized current game state
 
 ## Example Flow
 
