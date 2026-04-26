@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { mkdir, appendFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 export type Color = "white" | "black";
@@ -121,7 +121,7 @@ type AppliedMove = {
 
 const PORT = Number(process.env.PORT ?? "3000");
 const GAMES_DIR = "games";
-const MOVE_TIMEOUT_MS = 60_000;
+const MOVE_TIMEOUT_MS = 60_000 * 10;
 
 const players = new Map<string, Player>();
 const games = new Map<string, Game>();
@@ -285,10 +285,7 @@ async function handleStartGame(
   game.positionCounts.set(initialKey, 1);
 
   games.set(game.id, game);
-  await appendGameLine(
-    game.id,
-    `Game started at ${game.startedAt}. White=${whitePlayer.id} Black=${blackPlayer.id}`,
-  );
+  await writeGamePgn(game);
 
   sendJson(res, 201, {
     gameId: game.id,
@@ -411,7 +408,7 @@ async function runGameLoop(gameId: string): Promise<void> {
       const movePrefix = `${game.moveIndex}. ${currentColor}`;
       const moveLine = `${movePrefix} ${notation} (${moveRecord.remainingTimeSeconds}s left)`;
       console.log(`[game:${game.id}] ${moveLine}`);
-      await appendGameLine(game.id, moveLine);
+      await writeGamePgn(game);
 
       const opponentColor = oppositeColor(currentColor);
       const opponentHasLegalMoves = getAllLegalMoves(game, opponentColor).length > 0;
@@ -572,6 +569,120 @@ export function notationToCoordinate(notation: string): Coordinate {
 
 export function coordinateToNotation(square: Coordinate): string {
   return `${FILES[square.col]}${8 - square.row}`;
+}
+
+export function renderMoveAsSan(game: Game, from: Coordinate, to: Coordinate): string {
+  const preMoveGame = cloneGame(game);
+  const postMoveGame = cloneGame(game);
+  const applied = applyMove(postMoveGame, from, to);
+  return formatSanMove(preMoveGame, from, to, applied, postMoveGame);
+}
+
+function formatSanMove(
+  preMoveGame: Game,
+  from: Coordinate,
+  to: Coordinate,
+  applied: AppliedMove,
+  postMoveGame: Game,
+): string {
+  const piece = preMoveGame.board[from.row][from.col];
+  if (!piece) {
+    throw new Error("Cannot format SAN for a move without a source piece");
+  }
+
+  let san: string;
+
+  if (applied.castling === "king-side") {
+    san = "O-O";
+  } else if (applied.castling === "queen-side") {
+    san = "O-O-O";
+  } else {
+    const destination = coordinateToNotation(to).toLowerCase();
+    const isCapture = applied.captured !== undefined;
+
+    if (piece.type === "pawn") {
+      const prefix = isCapture ? `${coordinateToNotation(from)[0].toLowerCase()}x` : "";
+      san = `${prefix}${destination}`;
+      if (applied.promotion) {
+        san += `=${pieceTypeToSanSymbol(applied.promotion)}`;
+      }
+    } else {
+      const pieceSymbol = pieceTypeToSanSymbol(piece.type);
+      const disambiguation = getSanDisambiguation(preMoveGame, piece, from, to);
+      san = `${pieceSymbol}${disambiguation}${isCapture ? "x" : ""}${destination}`;
+    }
+  }
+
+  const opponentColor = oppositeColor(piece.color);
+  const opponentHasLegalMoves = getAllLegalMoves(postMoveGame, opponentColor).length > 0;
+  const opponentInCheck = isInCheck(postMoveGame, opponentColor);
+
+  if (!opponentHasLegalMoves && opponentInCheck) {
+    return `${san}#`;
+  }
+
+  if (opponentInCheck) {
+    return `${san}+`;
+  }
+
+  return san;
+}
+
+function getSanDisambiguation(
+  game: Game,
+  piece: Piece,
+  from: Coordinate,
+  to: Coordinate,
+): string {
+  const competingMoves = getAllLegalMoves(game, piece.color).filter((candidate) => {
+    if (candidate.to.row !== to.row || candidate.to.col !== to.col) {
+      return false;
+    }
+
+    if (candidate.from.row === from.row && candidate.from.col === from.col) {
+      return false;
+    }
+
+    const candidatePiece = game.board[candidate.from.row][candidate.from.col];
+    return candidatePiece?.type === piece.type;
+  });
+
+  if (competingMoves.length === 0) {
+    return "";
+  }
+
+  const fromSquare = coordinateToNotation(from).toLowerCase();
+  const sameFile = competingMoves.some((candidate) => candidate.from.col === from.col);
+  const sameRank = competingMoves.some((candidate) => candidate.from.row === from.row);
+
+  if (!sameFile) {
+    return fromSquare[0];
+  }
+
+  if (!sameRank) {
+    return fromSquare[1];
+  }
+
+  return fromSquare;
+}
+
+function pieceTypeToSanSymbol(pieceType: PieceType): string {
+  switch (pieceType) {
+    case "pawn":
+      return "";
+    case "knight":
+      return "N";
+    case "bishop":
+      return "B";
+    case "rook":
+      return "R";
+    case "queen":
+      return "Q";
+    case "king":
+      return "K";
+    default:
+      return "";
+  }
 }
 
 export function getAllLegalMoves(game: Game, color: Color): ParsedMove[] {
@@ -1006,16 +1117,156 @@ async function finishGame(game: Game, result: GameResult): Promise<void> {
     : `Game drawn. Reason: ${result.reason}`;
 
   console.log(`[game:${game.id}] ${winnerLine}`);
-  await appendGameLine(game.id, winnerLine);
+  await writeGamePgn(game);
+}
+
+export function renderGamePgn(game: Game): string {
+  const tags = [
+    `[Event "Chess Engine State Game"]`,
+    `[Site "Local"]`,
+    `[Date "${formatPgnDate(game.startedAt)}"]`,
+    `[Round "?"]`,
+    `[White "${escapePgnTagValue(game.whitePlayerId)}"]`,
+    `[Black "${escapePgnTagValue(game.blackPlayerId)}"]`,
+    `[Result "${getPgnResultToken(game)}"]`,
+    `[TimeControl "${game.startTimeMinutes * 60}+${game.incrementSeconds}"]`,
+    `[GameId "${escapePgnTagValue(game.id)}"]`,
+  ];
+
+  if (game.result) {
+    tags.push(`[Termination "${escapePgnTagValue(game.result.reason)}"]`);
+  }
+
+  const movetext = renderPgnMovetext(game);
+  return `${tags.join("\n")}\n\n${wrapPgnText(movetext)}\n`;
+}
+
+function renderPgnMovetext(game: Game): string {
+  const replayGame = createReplayGame(game);
+  const tokens: string[] = [];
+  let fullMoveNumber = 1;
+
+  for (let index = 0; index < game.moves.length; index += 1) {
+    const moveRecord = game.moves[index];
+    const from = notationToCoordinate(moveRecord.from);
+    const to = notationToCoordinate(moveRecord.to);
+    const preMoveGame = cloneGame(replayGame);
+    const applied = applyMove(replayGame, from, to);
+    const san = formatSanMove(preMoveGame, from, to, applied, replayGame);
+
+    if (moveRecord.color === "white") {
+      tokens.push(`${fullMoveNumber}. ${san}`);
+      continue;
+    }
+
+    if (index === 0 || game.moves[index - 1]?.color !== "white") {
+      tokens.push(`${fullMoveNumber}... ${san}`);
+    } else {
+      tokens.push(san);
+    }
+
+    fullMoveNumber += 1;
+  }
+
+  tokens.push(getPgnResultToken(game));
+  return tokens.join(" ");
+}
+
+function createReplayGame(game: Game): Game {
+  const replayGame: Game = {
+    id: game.id,
+    status: "active",
+    whitePlayerId: game.whitePlayerId,
+    blackPlayerId: game.blackPlayerId,
+    board: createInitialBoard(),
+    turn: "white",
+    createdAt: game.createdAt,
+    startedAt: game.startedAt,
+    finishedAt: game.finishedAt,
+    startTimeMinutes: game.startTimeMinutes,
+    incrementSeconds: game.incrementSeconds,
+    remainingTimeSeconds: {
+      white: game.startTimeMinutes * 60,
+      black: game.startTimeMinutes * 60,
+    },
+    moves: [],
+    moveIndex: 1,
+    enPassantTarget: null,
+    castlingRights: {
+      whiteKingSide: true,
+      whiteQueenSide: true,
+      blackKingSide: true,
+      blackQueenSide: true,
+    },
+    halfMoveClock: 0,
+    positionCounts: new Map(),
+    result: undefined,
+  };
+
+  const initialKey = getPositionKey(replayGame);
+  replayGame.positionCounts.set(initialKey, 1);
+
+  return replayGame;
+}
+
+function getPgnResultToken(game: Pick<Game, "whitePlayerId" | "blackPlayerId" | "result">): string {
+  if (!game.result) {
+    return "*";
+  }
+
+  if (!game.result.winnerPlayerId) {
+    return "1/2-1/2";
+  }
+
+  return game.result.winnerPlayerId === game.whitePlayerId ? "1-0" : "0-1";
+}
+
+function formatPgnDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}.${month}.${day}`;
+}
+
+function escapePgnTagValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function wrapPgnText(text: string, maxWidth = 80): string {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  let currentLine = words[0];
+
+  for (const word of words.slice(1)) {
+    if (currentLine.length + word.length + 1 <= maxWidth) {
+      currentLine += ` ${word}`;
+      continue;
+    }
+
+    lines.push(currentLine);
+    currentLine = word;
+  }
+
+  lines.push(currentLine);
+  return lines.join("\n");
 }
 
 async function ensureGamesDirectory(): Promise<void> {
   await mkdir(GAMES_DIR, { recursive: true });
 }
 
-async function appendGameLine(gameId: string, line: string): Promise<void> {
+function getGamePgnPath(gameId: string): string {
+  return `${GAMES_DIR}/${gameId}.txt`;
+}
+
+async function writeGamePgn(game: Game): Promise<void> {
   await ensureGamesDirectory();
-  await appendFile(`${GAMES_DIR}/${gameId}.txt`, `${line}\n`, "utf8");
+  await writeFile(getGamePgnPath(game.id), renderGamePgn(game), "utf8");
 }
 
 function serializeBoard(board: Board): string[][] {

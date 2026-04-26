@@ -4,6 +4,9 @@ import { search } from "./Tree";
 import { Color, Move, Piece, PieceType, Square } from "./types";
 
 const PORT = Number(process.env.PORT ?? "4003");
+const PLAYER_ADDRESS = process.env.PLAYER_ADDRESS?.trim() || "127.0.0.1";
+const PLAYER_PATH = normalizeBasePath(process.env.PLAYER_PATH?.trim() || "/");
+const ORCHESTRATOR_URL = (process.env.ORCHESTRATOR_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
 const FILES = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
 
 type CastlingRights = {
@@ -26,13 +29,29 @@ type MoveRequest = {
   enPassantTarget: string | null;
 };
 
+type RegisteredPlayer = {
+  id: string;
+  address: string;
+  port: number;
+  path: string;
+  registeredAt: string;
+};
+
+type RegisterPlayerResponse = {
+  playerId: string;
+  player: RegisteredPlayer;
+};
+
+const movePath = joinBasePath(PLAYER_PATH, "move");
+const healthPath = joinBasePath(PLAYER_PATH, "health");
+
 createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  if (req.method === "POST" && req.url === "/move") {
+  if (req.method === "POST" && req.url === movePath) {
     await handleMove(req, res);
     return;
   }
 
-  if (req.method === "GET" && req.url === "/health") {
+  if (req.method === "GET" && req.url === healthPath) {
     res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
     res.end("ok");
     return;
@@ -41,7 +60,10 @@ createServer(async (req: IncomingMessage, res: ServerResponse) => {
   res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
   res.end("Not found");
 }).listen(PORT, () => {
-  console.log(`Mat algo player listening on port ${PORT}`);
+  console.log(
+    `Mat algo player listening on port ${PORT} (path ${PLAYER_PATH}, move ${movePath})`,
+  );
+  void registerPlayer();
 });
 
 async function handleMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -159,4 +181,44 @@ async function readJsonBody(req: IncomingMessage): Promise<MoveRequest> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as MoveRequest;
+}
+
+function normalizeBasePath(path: string): string {
+  if (!path || path === "/") return "/";
+  return `/${path.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function joinBasePath(basePath: string, suffix: string): string {
+  return basePath === "/" ? `/${suffix}` : `${basePath}/${suffix}`;
+}
+
+async function registerPlayer(): Promise<void> {
+  try {
+    const response = await fetch(`${ORCHESTRATOR_URL}/players/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        address: PLAYER_ADDRESS,
+        port: PORT,
+        path: PLAYER_PATH,
+      }),
+    });
+
+    const rawText = await response.text();
+    if (!response.ok) {
+      console.error(
+        `Player registration failed with status ${response.status}: ${rawText || "<empty body>"}`,
+      );
+      return;
+    }
+
+    const registration = JSON.parse(rawText) as RegisterPlayerResponse;
+    console.log(
+      `Registered player ${registration.playerId} with orchestrator at ${ORCHESTRATOR_URL}`,
+    );
+  } catch (error) {
+    console.error(`Player registration failed:`, error);
+  }
 }

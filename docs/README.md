@@ -261,9 +261,9 @@ games/<gameId>.txt
 
 The file contains:
 
-- a game start line
-- one line per accepted move
-- a winner or draw line when the game ends
+- PGN tag pairs describing the game
+- PGN movetext with SAN moves
+- the PGN result token (`1-0`, `0-1`, `1/2-1/2`, or `*`)
 
 The orchestrator also exposes:
 
