@@ -2,11 +2,11 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { mkdir, appendFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
-type Color = "white" | "black";
-type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
-type GameStatus = "pending" | "active" | "finished";
+export type Color = "white" | "black";
+export type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
+export type GameStatus = "pending" | "active" | "finished";
 
-type Piece = {
+export type Piece = {
   color: Color;
   type: PieceType;
 };
@@ -22,21 +22,21 @@ type Player = PlayerRegistration & {
   registeredAt: string;
 };
 
-type Board = Array<Array<Piece | null>>;
+export type Board = Array<Array<Piece | null>>;
 
-type Coordinate = {
+export type Coordinate = {
   row: number;
   col: number;
 };
 
-type CastlingRights = {
+export type CastlingRights = {
   whiteKingSide: boolean;
   whiteQueenSide: boolean;
   blackKingSide: boolean;
   blackQueenSide: boolean;
 };
 
-type MoveRecord = {
+export type MoveRecord = {
   from: string;
   to: string;
   color: Color;
@@ -50,13 +50,13 @@ type MoveRecord = {
   enPassant?: boolean;
 };
 
-type GameResult = {
+export type GameResult = {
   winnerPlayerId: string | null;
   loserPlayerId: string | null;
   reason: string;
 };
 
-type Game = {
+export type Game = {
   id: string;
   status: GameStatus;
   whitePlayerId: string;
@@ -78,7 +78,7 @@ type Game = {
   result?: GameResult;
 };
 
-type SerializedGame = {
+export type SerializedGame = {
   id: string;
   status: GameStatus;
   whitePlayerId: string;
@@ -100,7 +100,7 @@ type SerializedGame = {
   board: string[][];
 };
 
-type MoveRequestPayload = SerializedGame & {
+export type MoveRequestPayload = SerializedGame & {
   playerId: string;
   lastError: string | null;
 };
@@ -128,20 +128,25 @@ const games = new Map<string, Game>();
 
 const FILES = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
 
-void ensureGamesDirectory();
+export function createOrchestratorServer() {
+  return createServer(async (req, res) => {
+    try {
+      await routeRequest(req, res);
+    } catch (error) {
+      console.error("Unhandled request error:", error);
+      sendJson(res, 500, { error: "Internal server error" });
+    }
+  });
+}
 
-const server = createServer(async (req, res) => {
-  try {
-    await routeRequest(req, res);
-  } catch (error) {
-    console.error("Unhandled request error:", error);
-    sendJson(res, 500, { error: "Internal server error" });
-  }
-});
+if (import.meta.main) {
+  void ensureGamesDirectory();
 
-server.listen(PORT, () => {
-  console.log(`Chess orchestrator listening on port ${PORT}`);
-});
+  const server = createOrchestratorServer();
+  server.listen(PORT, () => {
+    console.log(`Chess orchestrator listening on port ${PORT}`);
+  });
+}
 
 async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -513,7 +518,7 @@ function pickPlayers(requestedWhiteId: string | null): [Player, Player] | null {
   return Math.random() < 0.5 ? [first, second] : [second, first];
 }
 
-function createInitialBoard(): Board {
+export function createInitialBoard(): Board {
   const backRank: PieceType[] = [
     "rook",
     "knight",
@@ -537,7 +542,7 @@ function createInitialBoard(): Board {
   return board;
 }
 
-function parseMove(rawMove: string): ParsedMove | null {
+export function parseMove(rawMove: string): ParsedMove | null {
   const trimmed = rawMove.trim();
   const match = /^([A-H][1-8])\s*,\s*([A-H][1-8])$/i.exec(trimmed);
 
@@ -556,7 +561,7 @@ function parseMove(rawMove: string): ParsedMove | null {
   };
 }
 
-function notationToCoordinate(notation: string): Coordinate {
+export function notationToCoordinate(notation: string): Coordinate {
   const file = notation[0].toUpperCase();
   const rank = Number(notation[1]);
   return {
@@ -565,11 +570,11 @@ function notationToCoordinate(notation: string): Coordinate {
   };
 }
 
-function coordinateToNotation(square: Coordinate): string {
+export function coordinateToNotation(square: Coordinate): string {
   return `${FILES[square.col]}${8 - square.row}`;
 }
 
-function getAllLegalMoves(game: Game, color: Color): ParsedMove[] {
+export function getAllLegalMoves(game: Game, color: Color): ParsedMove[] {
   const moves: ParsedMove[] = [];
 
   for (let row = 0; row < 8; row += 1) {
@@ -594,7 +599,7 @@ function getAllLegalMoves(game: Game, color: Color): ParsedMove[] {
   return moves;
 }
 
-function getLegalMovesForPiece(game: Game, from: Coordinate): Array<{ to: Coordinate }> {
+export function getLegalMovesForPiece(game: Game, from: Coordinate): Array<{ to: Coordinate }> {
   const piece = game.board[from.row][from.col];
   if (!piece) {
     return [];
@@ -819,7 +824,7 @@ function getKingMoves(
   return moves;
 }
 
-function applyMove(game: Game, from: Coordinate, to: Coordinate): AppliedMove {
+export function applyMove(game: Game, from: Coordinate, to: Coordinate): AppliedMove {
   const piece = game.board[from.row][from.col];
   if (!piece) {
     throw new Error("Cannot apply move without a source piece");
@@ -966,7 +971,7 @@ function findKing(board: Board, color: Color): Coordinate {
   throw new Error(`King not found for ${color}`);
 }
 
-function cloneGame(game: Game): Game {
+export function cloneGame(game: Game): Game {
   return {
     ...game,
     board: game.board.map((row) => row.map((piece) => (piece ? { ...piece } : null))),
