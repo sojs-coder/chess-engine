@@ -78,6 +78,33 @@ type Game = {
   result?: GameResult;
 };
 
+type SerializedGame = {
+  id: string;
+  status: GameStatus;
+  whitePlayerId: string;
+  blackPlayerId: string;
+  turn: Color;
+  createdAt: string;
+  startedAt: string;
+  finishedAt?: string;
+  startTimeMinutes: number;
+  incrementSeconds: number;
+  remainingTimeSeconds: Record<Color, number>;
+  moves: MoveRecord[];
+  moveIndex: number;
+  enPassantTarget: string | null;
+  castlingRights: CastlingRights;
+  halfMoveClock: number;
+  positionCounts: Record<string, number>;
+  result?: GameResult;
+  board: string[][];
+};
+
+type MoveRequestPayload = SerializedGame & {
+  playerId: string;
+  lastError: string | null;
+};
+
 type ParsedMove = {
   from: Coordinate;
   to: Coordinate;
@@ -434,6 +461,7 @@ async function requestMoveFromPlayer(
 ): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MOVE_TIMEOUT_MS);
+  const playerId = getPlayerIdForColor(game, game.turn);
 
   try {
     const response = await fetch(buildMoveUrl(player), {
@@ -441,20 +469,7 @@ async function requestMoveFromPlayer(
       headers: {
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        gameId: game.id,
-        turn: game.turn,
-        playerId: getPlayerIdForColor(game, game.turn),
-        whitePlayerId: game.whitePlayerId,
-        blackPlayerId: game.blackPlayerId,
-        moveIndex: game.moveIndex,
-        startTimeMinutes: game.startTimeMinutes,
-        roundAdditionalSeconds: game.incrementSeconds,
-        remainingTimeSeconds: game.remainingTimeSeconds,
-        lastError: errorMessage,
-        moves: game.moves,
-        board: serializeBoard(game.board),
-      }),
+      body: JSON.stringify(serializeMoveRequest(game, playerId, errorMessage)),
       signal: controller.signal,
     });
 
@@ -1020,7 +1035,11 @@ function serializeBoard(board: Board): string[][] {
   );
 }
 
-function serializeGame(game: Game) {
+function serializePositionCounts(positionCounts: Map<string, number>): Record<string, number> {
+  return Object.fromEntries(positionCounts);
+}
+
+function serializeGame(game: Game): SerializedGame {
   return {
     id: game.id,
     status: game.status,
@@ -1032,12 +1051,27 @@ function serializeGame(game: Game) {
     finishedAt: game.finishedAt,
     startTimeMinutes: game.startTimeMinutes,
     incrementSeconds: game.incrementSeconds,
-    remainingTimeSeconds: game.remainingTimeSeconds,
-    moves: game.moves,
+    remainingTimeSeconds: { ...game.remainingTimeSeconds },
+    moves: game.moves.map((move) => ({ ...move })),
     moveIndex: game.moveIndex,
+    enPassantTarget: game.enPassantTarget,
+    castlingRights: { ...game.castlingRights },
     halfMoveClock: game.halfMoveClock,
-    result: game.result,
+    positionCounts: serializePositionCounts(game.positionCounts),
+    result: game.result ? { ...game.result } : undefined,
     board: serializeBoard(game.board),
+  };
+}
+
+function serializeMoveRequest(
+  game: Game,
+  playerId: string,
+  lastError: string | null,
+): MoveRequestPayload {
+  return {
+    ...serializeGame(game),
+    playerId,
+    lastError,
   };
 }
 

@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 
 type Color = "white" | "black";
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
+type GameStatus = "pending" | "active" | "finished";
 
 type Piece = {
   color: Color;
@@ -15,12 +16,55 @@ type Coordinate = {
 
 type Board = Array<Array<Piece | null>>;
 
+type CastlingRights = {
+  whiteKingSide: boolean;
+  whiteQueenSide: boolean;
+  blackKingSide: boolean;
+  blackQueenSide: boolean;
+};
+
+type MoveRecord = {
+  from: string;
+  to: string;
+  color: Color;
+  piece: PieceType;
+  playerId: string;
+  durationMs: number;
+  remainingTimeSeconds: number;
+  captured?: PieceType;
+  promotion?: PieceType;
+  castling?: "king-side" | "queen-side";
+  enPassant?: boolean;
+};
+
+type GameResult = {
+  winnerPlayerId: string | null;
+  loserPlayerId: string | null;
+  reason: string;
+};
+
 type MoveRequest = {
+  id: string;
+  status: GameStatus;
+  whitePlayerId: string;
+  blackPlayerId: string;
   turn: Color;
-  playerId?: string;
-  whitePlayerId?: string;
-  blackPlayerId?: string;
+  createdAt: string;
+  startedAt: string;
+  finishedAt?: string;
+  startTimeMinutes: number;
+  incrementSeconds: number;
+  remainingTimeSeconds: Record<Color, number>;
+  moves: MoveRecord[];
+  moveIndex: number;
+  enPassantTarget: string | null;
+  castlingRights: CastlingRights;
+  halfMoveClock: number;
+  positionCounts: Record<string, number>;
+  result?: GameResult;
   board: string[][];
+  playerId: string;
+  lastError: string | null;
 };
 
 type ParsedMove = {
@@ -52,7 +96,7 @@ createServer(async (req, res) => {
 async function handleMove(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJsonBody(req);
   const board = deserializeBoard(body.board);
-  const color = inferPlayerColor(body);
+  const color = body.turn;
   const legalMoves = getAllPseudoLegalMoves(board, color);
 
   if (legalMoves.length === 0) {
@@ -66,14 +110,6 @@ async function handleMove(req: IncomingMessage, res: ServerResponse): Promise<vo
 
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
   res.end(response);
-}
-
-function inferPlayerColor(body: MoveRequest): Color {
-  if (body.playerId && body.whitePlayerId && body.blackPlayerId) {
-    return body.playerId === body.whitePlayerId ? "white" : "black";
-  }
-
-  return body.turn;
 }
 
 function deserializeBoard(rawBoard: unknown): Board {

@@ -28,18 +28,6 @@ def parse_piece(cell):
 def deserialize_board(raw_board):
     return [[parse_piece(cell) for cell in row] for row in raw_board]
 
-
-def infer_player_color(payload):
-    player_id = payload.get("playerId")
-    white_player_id = payload.get("whitePlayerId")
-    black_player_id = payload.get("blackPlayerId")
-
-    if player_id and white_player_id and black_player_id:
-        return "white" if player_id == white_player_id else "black"
-
-    return payload["turn"]
-
-
 def is_on_board(square):
     return 0 <= square["row"] < 8 and 0 <= square["col"] < 8
 
@@ -207,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
         raw_body = self.rfile.read(content_length).decode("utf-8")
         payload = json.loads(raw_body)
         board = deserialize_board(payload["board"])
-        color = infer_player_color(payload)
+        color = payload["turn"]
         moves = get_all_moves(board, color)
 
         if not moves:

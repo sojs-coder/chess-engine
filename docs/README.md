@@ -129,11 +129,12 @@ const game: Game = {
 Notes:
 
 - `board` is the internal board model (`Piece | null`), created by `createInitialBoard()`.
-- `incrementSeconds` is the stored per-turn increment. The move request payload sends that same value as `roundAdditionalSeconds`.
+- `incrementSeconds` in the serialized game state comes from the `round_additional_seconds` query parameter used when starting the game.
 - `enPassantTarget`, `castlingRights`, `halfMoveClock`, and `positionCounts` are tracked in memory for move legality and draw detection.
 - Immediately after creation, the initial position is added to `positionCounts` with a count of `1`.
+- The serialized game state uses a plain JSON object for `positionCounts` because `Map` is not JSON-safe.
 
-`GET /games/<gameId>` returns a serialized snapshot of the current game state rather than the raw in-memory object:
+`GET /games/<gameId>` returns a serialized snapshot of the current game state rather than the raw in-memory object. The same serialized state is also sent to players on `POST /move`.
 
 ```json
 {
@@ -152,7 +153,17 @@ Notes:
   },
   "moves": [],
   "moveIndex": 1,
+  "enPassantTarget": null,
+  "castlingRights": {
+    "whiteKingSide": true,
+    "whiteQueenSide": true,
+    "blackKingSide": true,
+    "blackQueenSide": true
+  },
   "halfMoveClock": 0,
+  "positionCounts": {
+    "<position-key>": 1
+  },
   "board": [
     ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"],
     ["bP", "bP", "bP", "bP", "bP", "bP", "bP", "bP"],
@@ -182,20 +193,34 @@ Request body shape:
 
 ```json
 {
-  "gameId": "uuid",
-  "turn": "white",
-  "playerId": "uuid",
+  "id": "uuid",
+  "status": "active",
   "whitePlayerId": "uuid",
   "blackPlayerId": "uuid",
-  "moveIndex": 1,
+  "turn": "white",
+  "playerId": "uuid",
+  "createdAt": "2026-04-25T23:00:00.000Z",
+  "startedAt": "2026-04-25T23:00:00.000Z",
   "startTimeMinutes": 5,
-  "roundAdditionalSeconds": 2,
+  "incrementSeconds": 2,
   "remainingTimeSeconds": {
     "white": 300,
     "black": 300
   },
-  "lastError": null,
   "moves": [],
+  "moveIndex": 1,
+  "enPassantTarget": null,
+  "castlingRights": {
+    "whiteKingSide": true,
+    "whiteQueenSide": true,
+    "blackKingSide": true,
+    "blackQueenSide": true
+  },
+  "halfMoveClock": 0,
+  "positionCounts": {
+    "<position-key>": 1
+  },
+  "lastError": null,
   "board": [
     ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"],
     ["bP", "bP", "bP", "bP", "bP", "bP", "bP", "bP"],
@@ -209,7 +234,7 @@ Request body shape:
 }
 ```
 
-This move request uses the same serialized board format returned by `GET /games/<gameId>`, not the raw internal `Game.board` structure.
+This move request is the serialized game state returned by `GET /games/<gameId>`, plus `playerId` and `lastError`.
 
 The player must return plain text in this format:
 
@@ -223,7 +248,7 @@ If the move is invalid, the orchestrator asks again and sets `lastError` to a me
 
 - The clock starts when the orchestrator sends the move request.
 - The clock stops when a valid move is received.
-- The orchestrator subtracts `turn_time - round_additional_seconds` from that player's remaining time.
+- The orchestrator subtracts `turn_time - incrementSeconds` from that player's remaining time.
 - If a player's remaining time reaches `0`, the other player wins on time.
 
 ## Logs And Game Files
